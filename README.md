@@ -17,4 +17,5 @@ Make sure you have Python installed and required dependencies (like `requests`, 
 Run the script using:
 
 ```bash
+  pip install selenium
   python main.py --url "https://blinkit.com/cn/munchies/bhujia-mixtures/cid/1237/1178"
