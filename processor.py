@@ -16,6 +16,49 @@ class BlinkitProcessor:
         """
         Find all category directories or response files in the data directory
         If category_pattern is provided, will only return files matching that pattern
+        Works with the new nested folder organization
+        """
+        # Check for category directories first
+        category_dirs = [d for d in Path(self.directory).iterdir() if d.is_dir()]
+        
+        if not category_dirs:
+            # Fall back to old structure if no directories found
+            return self._find_category_files_old_structure(category_pattern)
+        
+        if category_pattern:
+            # Filter by category pattern
+            matching_dirs = []
+            for dir_path in category_dirs:
+                if category_pattern in dir_path.name:
+                    matching_dirs.append(dir_path)
+            
+            if not matching_dirs:
+                print(f"No category directories found matching pattern: {category_pattern}")
+                return []
+            
+            # Get all JSON files in matching directories
+            all_files = []
+            for dir_path in matching_dirs:
+                json_files = list(dir_path.glob("*.json"))
+                all_files.extend(json_files)
+            
+            return all_files
+        
+        # Group by category
+        category_files = {}
+        for dir_path in category_dirs:
+            category = dir_path.name
+            json_files = list(dir_path.glob("*.json"))
+            
+            if json_files:  # Only include if there are files
+                category_files[category] = json_files
+        
+        return category_files
+    
+    def _find_category_files_old_structure(self, category_pattern=None):
+        """
+        Find all category response files in the old directory structure
+        If category_pattern is provided, will only return files matching that pattern
         """
         all_files = list(Path(self.directory).glob("*_response_*.json"))
         
@@ -87,6 +130,58 @@ class BlinkitProcessor:
             
         return False
 
+    def extract_category_info_from_path(self, file_path):
+        """
+        Extract category information from file path based on new structure
+        """
+        # Get the parent directory name which should be the category
+        category_name = file_path.parent.name
+        
+        # Default values
+        l1_category = ""
+        l1_category_id = ""
+        l2_category = ""
+        l2_category_id = ""
+        
+        # Where munchies is l1_category, 1237 is l1_category_id, bhujia-mixtures is l2_category, 1178 is l2_category_id
+        parts = category_name.split("_")
+        if len(parts) >= 4:
+            l1_category = parts[0]
+            l1_category_id = parts[2]
+            l2_category = parts[1] 
+            l2_category_id = parts[3]
+        elif len(parts) >= 2:
+            # Handle case where only main category is present
+            l1_category = parts[0]
+            l1_category_id = parts[1]
+        
+        return {
+            'category_name': category_name,
+            'l1_category': l1_category,
+            'l1_category_id': l1_category_id,
+            'l2_category': l2_category,
+            'l2_category_id': l2_category_id
+        }
+
+    def extract_timestamp_from_filename(self, file_path):
+        """
+        Extract timestamp from filename in new format
+        """
+        file_name = file_path.name
+        
+        # Check if it's a new format file (lat{value}_lng{value}_{timestamp}.json)
+        matches = re.search(r'_([\d]+)\.json$', file_name)
+        if matches:
+            return matches.group(1)
+            
+        # Try old format
+        try:
+            timestamp_part = file_name.split('_response_')[1].split('_')[0]
+            return timestamp_part
+        except:
+            # Fallback to file creation time
+            return str(int(os.path.getctime(file_path)))
+
     def parse_blinkit_json_files(self, files):
         """
         Parses specified JSON files and extracts product data.
@@ -103,36 +198,16 @@ class BlinkitProcessor:
                     data = json.load(f)
                 
                 # Extract timestamp from filename
-                try:
-                    file_name = os.path.basename(json_file)
-                    timestamp_part = file_name.split('_response_')[1].split('_')[0]
-                    date = datetime.datetime.fromtimestamp(int(timestamp_part))
-                    date_str = date.strftime('%Y-%m-%d')
-                except:
-                    # Fallback to file creation time
-                    date_str = datetime.datetime.fromtimestamp(os.path.getctime(json_file)).strftime('%Y-%m-%d')
+                timestamp_part = self.extract_timestamp_from_filename(json_file)
+                date = datetime.datetime.fromtimestamp(int(timestamp_part))
+                date_str = date.strftime('%Y-%m-%d')
                 
-                # Extract category information from filename
-                file_name = os.path.basename(json_file)
-                category_name = file_name.split("_response_")[0]
-                
-                # Default values for category information
-                l1_category = ""
-                l1_category_id = ""
-                l2_category = ""
-                l2_category_id = ""
-                
-                # Where munchies is l1_category, 1237 is l1_category_id, bhujia-mixtures is l2_category, 1178 is l2_category_id
-                parts = category_name.split("_")
-                if len(parts) >= 4:
-                    l1_category = parts[0]
-                    l1_category_id = parts[2]
-                    l2_category = parts[1] 
-                    l2_category_id = parts[3]
-                elif len(parts) >= 2:
-                    # Handle case where only main category is present
-                    l1_category = parts[0]
-                    l1_category_id = parts[1]
+                # Extract category information from path
+                category_info = self.extract_category_info_from_path(json_file)
+                l1_category = category_info['l1_category']
+                l1_category_id = category_info['l1_category_id']
+                l2_category = category_info['l2_category']
+                l2_category_id = category_info['l2_category_id']
                 
                 # Parse products from widgets structure
                 if "widgets" in data:
