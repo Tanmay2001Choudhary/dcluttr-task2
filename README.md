@@ -1,21 +1,47 @@
 # Blinkit Category Scraper
 
-This project is a web scraping tool designed to extract product data from Blinkit's website. Due to time constraints, the current implementation scrapes data for **only one random location** and **only one category**.
+📝 **Note**  
+*First time trying web scraping with a **hybrid approach** (merged two techniques). Updated on **14th April 2025***  
+
+---
+
+### 🔄 Update Log:
+
+- ✅ **Completed** automated data scraping for all **locations** and **categories** one-by-one.
+- Faced 403 Forbidden errors when trying direct API calling despite correct headers.
+- Selenium-only scraping was incomplete and more complex.
+- ✅ **Chose hybrid approach**:
+  - Used **Selenium** to simulate user interaction.
+  - Monitored network tab for specific **API hit**, captured JSON response.
+  - Parsed JSON and saved important fields to `.csv` files.
+
+---
+
+### 📁 Second Update:
+- Generated **separate `.csv` files** for each category-location combination.
+
+---
+
+### ✅ Final Status:
+- All combinations scraped and organized.
+- Merged all data into **one single `blinkit_data.csv`** for easy access and analysis.
+
+---
+
+## Project Description
+
+This is a web scraping tool to extract product data from Blinkit's website across multiple categories and locations using a hybrid Selenium + API approach.
 
 ## Task Status
 
-- **Task 1 (Scraping and CSV Generation)**: Fully completed
-- **Limitations**: 
-  - Scraping is currently limited to one category and one random location.
-  - Due to the time crunch (assignment received at **11:00 AM**, and had to complete quickly), I’m actively working on expanding the code for multiple categories and dynamic location selection.
-  - Web scraping itself took significant time, but the script successfully generates the output in CSV format.
+- ✅ **Scraping and CSV Generation**: Fully completed  
+- ✅ All category-location combinations handled  
+- ✅ Final merged output file generated  
 
 ## How to Run
 
-Make sure you have Python installed and required dependencies (like `requests`, `bs4`, etc.)
-
-Run the script using:
+Install dependencies and run the script:
 
 ```bash
-  pip install selenium
-  python main.py --url "https://blinkit.com/cn/munchies/bhujia-mixtures/cid/1237/1178"
+pip install selenium
+python main.py --url "https://blinkit.com/cn/munchies/bhujia-mixtures/cid/1237/1178"
