@@ -44,4 +44,4 @@ Install dependencies and run the script:
 
 ```bash
 pip install selenium
-python main.py --url "https://blinkit.com/cn/munchies/bhujia-mixtures/cid/1237/1178"
+python main.py
