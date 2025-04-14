@@ -43,5 +43,5 @@ This is a web scraping tool to extract product data from Blinkit's website acros
 Install dependencies and run the script:
 
 ```bash
-pip install selenium
+pip install selenium geopy
 python main.py
