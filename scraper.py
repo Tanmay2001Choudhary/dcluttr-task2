@@ -3,33 +3,21 @@ import json
 import random
 import os
 import re
-from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
-from selenium.webdriver.support.expected_conditions import staleness_of
+from selenium.common.exceptions import TimeoutException
 from geopy.geocoders import Nominatim
 
 class BlinkitAPIScraper:
-    def __init__(self, category_url, lat=None, lng=None, output_dir="blinkit_data"):
-        """
-        Initialize the scraper with the category URL and location coordinates
-        
-        Args:
-            category_url (str): URL of the category to scrape
-            lat (float): Latitude for location setting
-            lng (float): Longitude for location setting
-            output_dir (str): Directory to save output files
-        """
-        self.category_url = category_url
-        self.lat = lat
-        self.lng = lng
-        self.api_responses = []
+    def __init__(self, initial_url, lat=None, lng=None, output_dir="blinkit_data", driver=None):
         self.output_dir = output_dir
-        self.category_name = self.extract_category_name(category_url)
+        self.api_responses = []
+        self.current_lat = lat
+        self.current_lng = lng
+        self.current_category_name = None
+        self.current_category_url = initial_url
+        self.driver = driver
         
         # Initialize geolocator for address lookup
         self.geolocator = Nominatim(user_agent="blinkit_api_scraper")
@@ -37,80 +25,57 @@ class BlinkitAPIScraper:
         # Create output directory if it doesn't exist
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
+    
+    def start_session(self):
+        """Initialize the session by navigating to the initial URL"""
+        print(f"Starting session with URL: {self.current_category_url}")
+        self.driver.get(self.current_category_url)
         
-        # Create a log file
-        self.log_file = f"{self.output_dir}/scraping_log_{self.category_name}.txt"
-        with open(self.log_file, "w") as f:
-            f.write(f"Scraping started for {category_url} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            if lat and lng:
-                f.write(f"Using location coordinates: {lat}, {lng}\n")
-            
-        self.setup_driver()
+        # Wait for the page to load
+        time.sleep(10)
         
-    def log(self, message):
-        """Log a message to both console and log file"""
-        print(message)
-        with open(self.log_file, "a") as f:
-            f.write(f"{time.strftime('%H:%M:%S')} - {message}\n")
+        # Set location if coordinates were provided
+        if self.current_lat and self.current_lng:
+            self.set_location(self.current_lat, self.current_lng)
     
     def extract_category_name(self, url):
-        """
-        Extract category information from URL
-        Example: https://blinkit.com/cn/munchies/bhujia-mixtures/cid/1237/1178
-        Format: l1_category_l2_category_l1_id_l2_id (e.g., munchies_bhujia-mixtures_1237_1178)
-        """
-        # Parse URL to extract category information
         pattern = r"/cn/([^/]+)/([^/]+)/cid/(\d+)/(\d+)"
         match = re.search(pattern, url)
         
         if match:
-            l1_category = match.group(1)         # e.g., munchies
-            l2_category = match.group(2)         # e.g., bhujia-mixtures
-            l1_category_id = match.group(3)      # e.g., 1237
-            l2_category_id = match.group(4)      # e.g., 1178
+            l1_category = match.group(1)
+            l2_category = match.group(2)
+            l1_category_id = match.group(3)
+            l2_category_id = match.group(4)
             
-            # Create a category name with all components in desired format
-            return f"{l1_category}_{l2_category}_{l1_category_id}_{l2_category_id}"
+            return {
+                "name": f"{l1_category}_{l2_category}_{l1_category_id}_{l2_category_id}",
+                "l1_category": l1_category,
+                "l2_category": l2_category,
+                "l1_category_id": l1_category_id,
+                "l2_category_id": l2_category_id
+            }
         
         # Fallback if pattern doesn't match
         parts = url.split("/")
-        parts = [p for p in parts if p]  # Remove empty parts
+        parts = [p for p in parts if p]
         
         if len(parts) >= 2:
-            return f"{parts[-2]}_{parts[-1]}"
+            return {
+                "name": f"{parts[-2]}_{parts[-1]}",
+                "l1_category": parts[-2],
+                "l2_category": parts[-1],
+                "l1_category_id": "",
+                "l2_category_id": ""
+            }
         
-        return "category"
-        
-    def setup_driver(self):
-        """Setup the Chrome driver with proper options for network monitoring"""
-        options = Options()
-        
-        # Enable performance logging
-        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-        
-        # Make the browser less detectable
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument("--window-size=1920,1080")
-        
-        # Additional options for stability
-        options.add_argument("--disable-notifications")
-        options.add_argument("--disable-popup-blocking")
-        
-        # Uncomment to hide the browser
-        options.add_argument("--headless")
-        
-        self.driver = webdriver.Chrome(options=options)
-        self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            })
-            """
-        })
-        self.log("WebDriver initialized with performance logging enabled")
+        return {
+            "name": "category",
+            "l1_category": "",
+            "l2_category": "",
+            "l1_category_id": "",
+            "l2_category_id": ""
+        }
         
     def get_address_from_coordinates(self, lat, lon):
         """Get address from coordinates using geopy"""
@@ -118,266 +83,173 @@ class BlinkitAPIScraper:
             location = self.geolocator.reverse(f"{lat}, {lon}")
             return location.address
         except Exception as e:
-            self.log(f"Error getting address from coordinates: {str(e)}")
+            print(f"Error getting address from coordinates: {str(e)}")
             return "Unknown location"
 
-    def set_location(self):
-        """Set location using latitude and longitude with retry mechanism"""
-        if not self.lat or not self.lng:
-            self.log("No location coordinates provided. Skipping location setting.")
+    def set_location(self, lat, lng):
+        """Set location using latitude and longitude"""
+        # Skip if location is already set to these coordinates
+        if self.current_lat == lat and self.current_lng == lng:
+            print(f"Location already set to {lat}, {lng}")
             return True
             
-        self.log(f"Setting location to coordinates: {self.lat}, {self.lng}")
+        print(f"Setting location to coordinates: {lat}, {lng}")
+        self.current_lat = lat
+        self.current_lng = lng
         
         # Get address to search
-        address = self.get_address_from_coordinates(self.lat, self.lng)
-        self.log(f"Searching for address: {address}")
+        address = self.get_address_from_coordinates(lat, lng)
+        print(f"Searching for address: {address}")
         
-        # Add retry mechanism
-        max_retries = 3
-        for attempt in range(max_retries):
+        # Wait for page to load fully
+        time.sleep(5)
+        
+        # Try different possible selectors for the location button
+        location_button = None
+        possible_button_selectors = [
+            ".LocationBar__Container-sc-x8ezho-6",
+            ".LocationBar__Container",
+            "[data-testid='location-button']",
+            "//div[contains(text(), 'Deliver to')]",
+            "//button[contains(@class, 'LocationBar')]"
+        ]
+        
+        for selector in possible_button_selectors:
             try:
-                # Wait for page to load fully
-                time.sleep(5)
-                
-                # Try different possible selectors for the location button
-                location_button = None
-                possible_button_selectors = [
-                    ".LocationBar__Container-sc-x8ezho-6",
-                    ".LocationBar__Container",
-                    "[data-testid='location-button']",
-                    "//div[contains(text(), 'Deliver to')]",
-                    "//button[contains(@class, 'LocationBar')]"
-                ]
-                
-                for selector in possible_button_selectors:
-                    try:
-                        self.log(f"Trying selector: {selector}")
-                        if selector.startswith("//"):
-                            # XPath selector
-                            location_button = WebDriverWait(self.driver, 5).until(
-                                EC.element_to_be_clickable((By.XPATH, selector))
-                            )
-                        else:
-                            # CSS selector
-                            location_button = WebDriverWait(self.driver, 5).until(
-                                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                            )
-                        if location_button:
-                            self.log(f"Found location button with selector: {selector}")
-                            break
-                    except:
-                        continue
-                
-                if not location_button:
-                    # Fallback: Try to find any element that looks like a location button
-                    self.log("Trying to find location button by text content...")
-                    elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Deliver') or contains(text(), 'Location')]")
-                    for element in elements:
-                        self.log(f"Potential location element found: {element.text}")
-                        if ("deliver" in element.text.lower() or "location" in element.text.lower()):
-                            location_button = element
-                            break
-                
-                if not location_button:
-                    # Last resort: take a screenshot to debug
-                    screenshot_path = f"{self.output_dir}/debug_screenshot_{int(time.time())}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    self.log(f"Could not find location button. Screenshot saved as {screenshot_path}")
-                    
-                    if attempt < max_retries - 1:
-                        self.log(f"Retrying location setting (attempt {attempt+1}/{max_retries})...")
-                        continue
-                    return False
-                
-                # Click location button with better handling
-                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", location_button)
-                time.sleep(0.5)  # Small pause before clicking
-                self.driver.execute_script("arguments[0].click();", location_button)
-                time.sleep(2)  # Wait for modal to appear
-                
-                # Wait for search input with various possible selectors
-                search_input = None
-                possible_input_selectors = [
-                    "input[name='select-locality']",
-                    "input[placeholder*='search delivery location']",
-                    "input[placeholder*='location']",
-                    ".LocationSearchBox__InputSelect",
-                    "//input[contains(@placeholder, 'location')]"
-                ]
-                
-                for selector in possible_input_selectors:
-                    try:
-                        self.log(f"Trying input selector: {selector}")
-                        if selector.startswith("//"):
-                            # XPath selector
-                            search_input = WebDriverWait(self.driver, 5).until(
-                                EC.element_to_be_clickable((By.XPATH, selector))
-                            )
-                        else:
-                            # CSS selector
-                            search_input = WebDriverWait(self.driver, 5).until(
-                                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                            )
-                        if search_input:
-                            self.log(f"Found search input with selector: {selector}")
-                            break
-                    except:
-                        continue
-                
-                if not search_input:
-                    screenshot_path = f"{self.output_dir}/location_modal_{int(time.time())}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    self.log(f"Could not find search input. Screenshot saved as {screenshot_path}")
-                    
-                    if attempt < max_retries - 1:
-                        self.log(f"Retrying location setting (attempt {attempt+1}/{max_retries})...")
-                        continue
-                    return False
-                
-                # Clear and enter address with improved handling
-                search_input.clear()
-                time.sleep(0.3)
-                
-                # Type slowly and wait for elements to respond
-                query_text = address.split(',')[0].strip()
-                self.log(f"Typing search query: {query_text}")
-                
-                for char in query_text:
-                    try:
-                        search_input.send_keys(char)
-                        time.sleep(0.1)
-                    except StaleElementReferenceException:
-                        self.log("Search input became stale, trying to find it again...")
-                        # Try to find the input element again
-                        for selector in possible_input_selectors:
-                            try:
-                                if selector.startswith("//"):
-                                    search_input = WebDriverWait(self.driver, 5).until(
-                                        EC.element_to_be_clickable((By.XPATH, selector))
-                                    )
-                                else:
-                                    search_input = WebDriverWait(self.driver, 5).until(
-                                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                                    )
-                                if search_input:
-                                    search_input.clear()
-                                    search_input.send_keys(query_text)  # Send the full query at once
-                                    break
-                            except:
-                                continue
-                        break  # Break out of the character loop
-                
-                # Wait longer for search results to appear
-                time.sleep(3)
-                
-                # Try different possible selectors for search results
-                results_found = False
-                possible_results_selectors = [
-                    ".LocationSearchList__LocationDetailContainer-sc-93rfr7-1",
-                    ".LocationSearchList__LocationDetailContainer",
-                    "[data-testid='location-search-result']",
-                    "//div[contains(@class, 'LocationSearch')]",
-                    "//div[contains(text(), 'Delhi') or contains(text(), 'New Delhi')]"
-                ]
-                
-                for selector in possible_results_selectors:
-                    try:
-                        self.log(f"Trying results selector: {selector}")
-                        if selector.startswith("//"):
-                            # XPath selector
-                            search_results = WebDriverWait(self.driver, 5).until(
-                                EC.presence_of_all_elements_located((By.XPATH, selector))
-                            )
-                        else:
-                            # CSS selector
-                            search_results = WebDriverWait(self.driver, 5).until(
-                                EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
-                            )
-                        
-                        if search_results and len(search_results) > 0:
-                            self.log(f"Found {len(search_results)} search results with selector: {selector}")
-                            # Click the first result with better handling
-                            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", search_results[0])
-                            time.sleep(0.5)  # Pause before clicking
-                            self.driver.execute_script("arguments[0].click();", search_results[0])
-                            results_found = True
-                            break
-                    except Exception as e:
-                        self.log(f"Error with selector {selector}: {str(e)}")
-                        continue
-                
-                if not results_found:
-                    screenshot_path = f"{self.output_dir}/search_results_{int(time.time())}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    self.log(f"No location results found or could not click. Screenshot saved as {screenshot_path}")
-                    
-                    # Last resort: Try to send Enter key to select the first result
-                    try:
-                        search_input.send_keys("\n")
-                        time.sleep(5)
-                        
-                        # Check if page changed (location might have been set)
-                        if "?latitude=" in self.driver.current_url or "visibility?latitude=" in self.driver.current_url:
-                            self.log("Location might have been set via Enter key")
-                            return True
-                    except:
-                        self.log("Enter key approach failed")
-                    
-                    if attempt < max_retries - 1:
-                        self.log(f"Retrying location setting (attempt {attempt+1}/{max_retries})...")
-                        continue
-                    return False
-                
-                # Wait for page to reload with new location
-                # Use longer wait time and check for page change
-                wait_start = time.time()
-                max_wait = 10  # seconds
-                location_set = False
-                
-                while time.time() - wait_start < max_wait:
-                    if "?latitude=" in self.driver.current_url or "visibility?latitude=" in self.driver.current_url:
-                        location_set = True
-                        break
-                    time.sleep(1)
-                
-                if location_set:
-                    self.log("Location set successfully - confirmed via URL parameters")
+                if selector.startswith("//"):
+                    # XPath selector
+                    location_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
                 else:
-                    self.log("Waiting for page reload after location selection...")
-                    time.sleep(5)
-                
-                return True
-            
-            except StaleElementReferenceException as e:
-                self.log(f"Stale element encountered during location setting: {str(e)}")
-                if attempt < max_retries - 1:
-                    self.log(f"Retrying location setting (attempt {attempt+1}/{max_retries})...")
-                    time.sleep(2)  # Wait before retrying
-                else:
-                    screenshot_path = f"{self.output_dir}/error_screenshot_{int(time.time())}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    self.log(f"Max retries reached with stale elements. Screenshot saved as {screenshot_path}")
-                    return False
-                    
-            except Exception as e:
-                screenshot_path = f"{self.output_dir}/error_screenshot_{int(time.time())}.png"
-                self.driver.save_screenshot(screenshot_path)
-                self.log(f"Error setting location: {str(e)}")
-                self.log(f"Error screenshot saved as {screenshot_path}")
-                
-                if attempt < max_retries - 1:
-                    self.log(f"Retrying location setting (attempt {attempt+1}/{max_retries})...")
-                    time.sleep(2)  # Wait before retrying
-                else:
-                    return False
+                    # CSS selector
+                    location_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                if location_button:
+                    break
+            except:
+                continue
         
-        return False  # Should not reach here but just in case
+        if not location_button:
+            # Fallback: Try to find any element that looks like a location button
+            elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Deliver') or contains(text(), 'Location')]")
+            for element in elements:
+                if ("deliver" in element.text.lower() or "location" in element.text.lower()):
+                    location_button = element
+                    break
+        
+        if not location_button:
+            print("Could not find location button")
+            return False
+        
+        # Click location button
+        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", location_button)
+        time.sleep(0.5)
+        self.driver.execute_script("arguments[0].click();", location_button)
+        time.sleep(2)
+        
+        # Wait for search input with various possible selectors
+        search_input = None
+        possible_input_selectors = [
+            "input[name='select-locality']",
+            "input[placeholder*='search delivery location']",
+            "input[placeholder*='location']",
+            ".LocationSearchBox__InputSelect",
+            "//input[contains(@placeholder, 'location')]"
+        ]
+        
+        for selector in possible_input_selectors:
+            try:
+                if selector.startswith("//"):
+                    search_input = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                else:
+                    search_input = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                if search_input:
+                    break
+            except:
+                continue
+        
+        if not search_input:
+            print("Could not find search input")
+            return False
+        
+        # Clear and enter address
+        search_input.clear()
+        time.sleep(0.3)
+        
+        # Type search query
+        query_text = address.split(',')[0].strip()
+        print(f"Typing search query: {query_text}")
+        search_input.send_keys(query_text)
+        
+        # Wait for search results to appear
+        time.sleep(3)
+        
+        # Try different possible selectors for search results
+        results_found = False
+        possible_results_selectors = [
+            ".LocationSearchList__LocationDetailContainer-sc-93rfr7-1",
+            ".LocationSearchList__LocationDetailContainer",
+            "[data-testid='location-search-result']",
+            "//div[contains(@class, 'LocationSearch')]",
+            "//div[contains(text(), 'Delhi') or contains(text(), 'New Delhi')]"
+        ]
+        
+        for selector in possible_results_selectors:
+            try:
+                if selector.startswith("//"):
+                    search_results = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_all_elements_located((By.XPATH, selector))
+                    )
+                else:
+                    search_results = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
+                    )
+                
+                if search_results and len(search_results) > 0:
+                    # Click the first result
+                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", search_results[0])
+                    time.sleep(0.5)
+                    self.driver.execute_script("arguments[0].click();", search_results[0])
+                    results_found = True
+                    break
+            except:
+                continue
+        
+        if not results_found:
+            # Last resort: Try to send Enter key
+            try:
+                search_input.send_keys("\n")
+                time.sleep(5)
+            except:
+                pass
+        
+        # Wait for page to reload with new location
+        time.sleep(10)
+        
+        # Verify location was set by checking URL parameters
+        if "?latitude=" in self.driver.current_url or "visibility?latitude=" in self.driver.current_url:
+            print("Location set successfully")
+            return True
+        else:
+            print("Could not confirm location was set")
+            return False
+
+    def update_location(self, lat, lng):
+        """Update location for an existing session"""
+        return self.set_location(lat, lng)
 
     def extract_api_responses(self):
-        """Extract API responses from browser logs with immediate processing"""
+        """Extract API responses from browser logs"""
+        api_data = []
+        
         try:
-            # Process logs immediately to avoid missing data
+            # Get network logs
             logs = self.driver.get_log("performance")
             
             # Track which requests we've already processed
@@ -400,268 +272,273 @@ class BlinkitAPIScraper:
                                 continue
                                 
                             processed_request_ids.add(request_id)
-                            self.log(f"Found API response: {response_url}")
                             
-                            # Immediate response processing
-                            try:
-                                # Don't wait too long - process immediately
-                                response_body = self.driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": request_id})
-                                
-                                if response_body and "body" in response_body:
-                                    # Parse the JSON response
-                                    try:
-                                        json_data = json.loads(response_body["body"])
-                                        
-                                        # Create a minimal response object to save memory
-                                        api_response = {
-                                            "url": response_url,
-                                            "request_id": request_id,
-                                            "timestamp": int(time.time()),
-                                            "location": {"lat": self.lat, "lng": self.lng} if self.lat and self.lng else None
-                                        }
-                                        
-                                        self.api_responses.append(api_response)
-                                        self.log(f"Successfully captured API response data ({len(response_body['body'])} bytes)")
-                                        
-                                        # Save the response to a file immediately
-                                        self.save_response(json_data, request_id)
-                                        
-                                    except json.JSONDecodeError:
-                                        self.log(f"Error: Could not parse JSON response")
-                            except Exception as e:
-                                self.log(f"Error getting response body: {str(e)}")
-                                # Continue to the next log entry instead of breaking
-                except Exception as e:
-                    # Silently ignore errors in processing log entries
-                    pass
+                            # Get response body
+                            response_body = self.driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": request_id})
+                            
+                            if response_body and "body" in response_body:
+                                # Parse the JSON response
+                                json_data = json.loads(response_body["body"])
+                                api_data.append(json_data)
+                except:
+                    continue
+                    
         except Exception as e:
-            self.log(f"Error in extract_api_responses: {str(e)}")
-    
-    def save_response(self, response_data, request_id):
-        """Save a single API response to a file with improved organization"""
-        timestamp = int(time.time())
-        
-        # Create category directory if it doesn't exist
-        category_dir = f"{self.output_dir}/{self.category_name}"
-        if not os.path.exists(category_dir):
-            os.makedirs(category_dir)
-            self.log(f"Created category directory: {category_dir}")
-        
-        # Format location for filename if available
-        loc_part = f"lat{self.lat}_lng{self.lng}" if self.lat and self.lng else "default_location"
-        
-        # Create a cleaner filename
-        filename = f"{category_dir}/{loc_part}_{timestamp}.json"
-        
-        # Add location data to the response
-        if self.lat and self.lng:
-            if not isinstance(response_data, dict):
-                response_data = {"original_data": response_data}
-            response_data["_meta"] = {
-                "latitude": self.lat,
-                "longitude": self.lng,
-                "timestamp": timestamp,
-                "address": self.get_address_from_coordinates(self.lat, self.lng),
-                "category_url": self.category_url,
-                "category_name": self.category_name
-            }
-        
-        try:
-            with open(filename, "w") as f:
-                json.dump(response_data, f, indent=2)
-            self.log(f"Saved response to {filename}")
-        except Exception as e:
-            self.log(f"Error saving response to file: {str(e)}")
-    
-    def scroll_page(self, max_scrolls=15):
-        """Scroll the page to trigger API requests with better error handling"""
-        self.log("Starting to scroll page to trigger API requests...")
-        
-        # Clear logs before starting to prevent capturing old responses
-        try:
-            self.driver.get_log("performance")
-        except:
-            pass
+            print(f"Error extracting API responses: {str(e)}")
             
-        # Extract initial responses
-        self.extract_api_responses()
-        initial_response_count = len(self.api_responses)
-        self.log(f"Initially found {initial_response_count} API responses")
+        return api_data
+    
+    def scroll_page(self, max_scrolls=25):
+        """Scroll the page to trigger API requests and return the API responses"""
+        print("Starting to scroll page to trigger API requests...")
         
-        # Find the container once to verify it exists
+        # Extract initial responses (important for pages with few products)
+        initial_api_data = self.extract_api_responses()
+        print(f"Initially found {len(initial_api_data)} API responses")
+        
+        # Use a dictionary to track unique API responses by URL to avoid duplicates
+        api_responses_by_url = {}
+        for response in initial_api_data:
+            # Create a unique key for this response based on available data
+            response_key = self._create_response_key(response)
+            if response_key not in api_responses_by_url:
+                api_responses_by_url[response_key] = response
+        
+        # Initialize pagination tracking
+        more_pages_exist = True
+        total_pagination_items = None
+        last_pagination_url = None
+        
+        # Check if we have pagination info already
+        for response in initial_api_data:
+            if 'response' in response and 'pagination' in response['response']:
+                if 'next_url' in response['response']['pagination']:
+                    more_pages_exist = True
+                    last_pagination_url = response['response']['pagination']['next_url']
+                else:
+                    # No next_url means we're on the last page already
+                    more_pages_exist = False
+                    print("No pagination URL found in initial response - might be single page")
+                
+            # Look for total_pagination_items in the response
+            if 'response' in response and 'pagination' in response['response'] and 'next_url' in response['response']['pagination']:
+                pagination_url = response['response']['pagination']['next_url']
+                # Extract total_pagination_items from URL if present
+                match = re.search(r'total_pagination_items=(\d+)', pagination_url)
+                if match:
+                    total_pagination_items = int(match.group(1))
+                    print(f"Found total_pagination_items: {total_pagination_items}")
+        
+        # Find the container to verify it exists
+        container_exists = False
         try:
             container = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.ID, "plpContainer"))
             )
-            self.log("Found product container for scrolling")
+            print("Found product container for scrolling")
+            container_exists = True
         except TimeoutException:
-            self.log("Warning: Product container not found. Will use window scrolling.")
-            
+            print("Warning: Product container not found. Will use window scrolling.")
+        
         # Scroll several times with pauses
         scroll_count = 0
         consecutive_no_new = 0
-        last_response_count = initial_response_count
+        max_consecutive_no_new = 5
+        last_response_count = len(api_responses_by_url)
         
-        while scroll_count < max_scrolls and consecutive_no_new < 3:
+        while more_pages_exist and scroll_count < max_scrolls and consecutive_no_new < max_consecutive_no_new:
             try:
-                # Take screenshot every few scrolls for debugging
-                if scroll_count % 3 == 0:
-                    self.driver.save_screenshot(f"{self.output_dir}/scroll_{scroll_count}.png")
+                # If we know for sure there's no more pages, exit immediately
+                if not more_pages_exist:
+                    print("Stopped scrolling: No more pagination URLs found")
+                    break
+               # Calculate scroll distance that increases with each iteration
+                base_scroll = 800
+                scroll_distance = base_scroll + (scroll_count * 800)  # Increases by 200px each scroll
+
+                # Apply to both container and window scrolling
+                if container_exists:
+                    self.driver.execute_script(f"""
+                        var container = document.getElementById('plpContainer');
+                        if (container) {{
+                            container.scrollTop += {scroll_distance};
+                            return true;
+                        }} else {{
+                            return false;
+                        }}
+                    """)
+                else:
+                    # Fall back to window scrolling
+                    self.driver.execute_script(f"window.scrollBy(0, {scroll_distance});")
                 
-                # First try container scrolling with better handling
+                # Wait after scrolling - slightly longer wait for better page loading
+                wait_time = 4 + random.uniform(0, 1.5)
+                time.sleep(wait_time)
+                                
+                # Wait for network to become idle before continuing
                 try:
                     self.driver.execute_script("""
-                        var container = document.getElementById('plpContainer');
-                        if (container) {
-                            // Save current scroll position
-                            var oldScroll = container.scrollTop;
-                            
-                            // Scroll by 500px each time
-                            container.scrollTop += 500;
-                            
-                            // Return whether we actually scrolled
-                            return container.scrollTop > oldScroll;
-                        } else {
-                            return false;
-                        }
+                        return new Promise(resolve => {
+                            const checkNetworkIdle = () => {
+                                const pending = performance.getEntriesByType('resource')
+                                    .filter(r => !r.responseEnd && r.name.includes('listing_widgets'));
+                                if (pending.length === 0) {
+                                    resolve(true);
+                                } else {
+                                    setTimeout(checkNetworkIdle, 500);
+                                }
+                            };
+                            checkNetworkIdle();
+                        });
                     """)
-                except Exception:
-                    # Fall back to window scrolling
-                    self.driver.execute_script("window.scrollBy(0, 500);")
-                
-                # Add random wait time to appear more human-like
-                wait_time = 3 + random.uniform(0, 1)  # Increased minimum wait time
-                self.log(f"Scrolled and waiting {wait_time:.1f} seconds...")
-                time.sleep(wait_time)
-                
+                except:
+                    # Fallback - just wait additional time
+                    time.sleep(3)
+                    
                 # Extract API responses after scrolling
-                self.extract_api_responses()
-                current_response_count = len(self.api_responses)
+                new_api_data = self.extract_api_responses()
                 
-                # Check if we've found new responses
+                # Process and deduplicate new responses
+                for response in new_api_data:
+                    response_key = self._create_response_key(response)
+                    if response_key not in api_responses_by_url:
+                        api_responses_by_url[response_key] = response
+                
+                # Check for pagination info in all responses
+                more_pages_exist = False  # Reset flag, will set to True if we find valid next_url
+                for response in api_responses_by_url.values():
+                    if 'response' in response and 'pagination' in response['response']:
+                        # Case 1: No next_url means we're on the last page
+                        if 'next_url' not in response['response']['pagination']:
+                            continue
+                            
+                        # Case 2: We have a next_url to check
+                        new_pagination_url = response['response']['pagination']['next_url']
+                        
+                        # Only count as a new pagination if URL is different
+                        if new_pagination_url != last_pagination_url:
+                            # Check if we've already processed all items
+                            entities_match = re.search(r'total_entities_processed=(\d+)', new_pagination_url)
+                            total_match = re.search(r'total_pagination_items=(\d+)', new_pagination_url)
+                            page_index_match = re.search(r'page_index=(\d+)', new_pagination_url)
+                            
+                            if entities_match and total_match:
+                                entities = int(entities_match.group(1))
+                                total = int(total_match.group(1))
+                                
+                                if entities >= total:
+                                    print(f"Reached all products: {entities}/{total}")
+                                    more_pages_exist = False
+                                    break
+                            
+                            if page_index_match and total_match:
+                                page_index = int(page_index_match.group(1))
+                                total_items = int(total_match.group(1))
+                                items_per_page = 15  # Based on limit=15 in URL
+                                
+                                total_pages = (total_items + items_per_page - 1) // items_per_page
+                                if page_index >= total_pages - 1:
+                                    print(f"Detected last pagination page: {page_index+1} of {total_pages}")
+                                    more_pages_exist = False
+                                    break
+                            
+                            # If we got here, we have a valid new pagination URL
+                            more_pages_exist = True
+                            last_pagination_url = new_pagination_url
+                            
+                            # Update total_pagination_items if available
+                            if total_match:
+                                new_total = int(total_match.group(1))
+                                if total_pagination_items is None or new_total > total_pagination_items:
+                                    total_pagination_items = new_total
+                                    print(f"Updated total_pagination_items: {total_pagination_items}")
+                        else:
+                            # If we see the same pagination URL repeatedly, it's likely we're at the end
+                            pass
+                
+                # Check if we've found new API responses
+                current_response_count = len(api_responses_by_url)
                 if current_response_count > last_response_count:
                     new_responses = current_response_count - last_response_count
-                    self.log(f"Scroll {scroll_count+1}: Found {new_responses} new API responses")
+                    print(f"Scroll {scroll_count+1}: Found {new_responses} new API responses, total: {current_response_count}")
                     last_response_count = current_response_count
                     consecutive_no_new = 0
                 else:
                     consecutive_no_new += 1
-                    self.log(f"Scroll {scroll_count+1}: No new responses ({consecutive_no_new}/3 consecutive)")
+                    print(f"Scroll {scroll_count+1}: No new responses ({consecutive_no_new}/{max_consecutive_no_new} consecutive)")
                 
-                scroll_count += 1
-                
-                # Add some random movements to appear more human-like, but less frequently
-                if random.random() > 0.8:  # Reduced frequency
-                    # Move to a random product to simulate browsing
+                # Occasional random product movement (helps trigger lazy loading)
+                if random.random() > 0.7:
                     try:
-                        # Use the updated product card selector
                         products = self.driver.find_elements(By.CSS_SELECTOR, "div > div > div[style*='grid-column: span']")
                         if products and len(products) > 0:
                             random_product = random.choice(products)
                             self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", random_product)
-                            self.log("Moved to a random product")
-                            time.sleep(2)  # Reduced wait time
+                            time.sleep(2)
                     except Exception as e:
-                        self.log(f"Error with random movement: {str(e)}")
+                        print(f"Error selecting random product: {str(e)}")
+                        pass
+                        
+                scroll_count += 1
                 
             except Exception as e:
-                self.log(f"Error during scrolling: {str(e)}")
-                # Don't break the loop on error - continue to next scroll attempt
+                print(f"Error during scrolling: {str(e)}")
                 time.sleep(1)
         
-        self.log(f"Scrolling complete after {scroll_count} scrolls. Captured {len(self.api_responses)} API responses")
-    
-    def run(self, scroll_count=15):
-        """Main method to run the scraper with improved error handling"""
+        # Final check for reason we stopped scrolling
+        if not more_pages_exist:
+            print("Stopped scrolling: No more pagination URLs found")
+        elif consecutive_no_new >= max_consecutive_no_new:
+            print(f"Stopped scrolling: No new data after {max_consecutive_no_new} consecutive attempts")
+        else:
+            print(f"Stopped scrolling: Reached maximum scroll limit ({max_scrolls})")
+            
+        print(f"Scrolling complete after {scroll_count} scrolls. Captured {len(api_responses_by_url)} unique API responses")
+        return list(api_responses_by_url.values())
+
+    def _create_response_key(self, response):
+        """Create a unique key for an API response to avoid duplicates"""
+        # If response has a pagination URL, use that as it's unique
+        if 'response' in response and 'pagination' in response['response'] and 'next_url' in response['response']['pagination']:
+            return response['response']['pagination']['next_url']
+        
+        # If response has postback params with shown_product_count, use that
+        if 'postback_params' in response and 'shown_product_count' in response['postback_params']:
+            return f"products_{response['postback_params']['shown_product_count']}"
+        
+        # If we have tracking data with an ID, use that
+        if 'response' in response and 'tracking' in response['response'] and 'le_meta' in response['response']['tracking']:
+            if 'id' in response['response']['tracking']['le_meta']:
+                return f"tracking_{response['response']['tracking']['le_meta']['id']}"
+        
+        # Last resort, use string representation of the response
+        import hashlib
+        return hashlib.md5(str(response).encode()).hexdigest()
+
+    def navigate_to_category(self, category_url):
+        """Navigate to a category URL"""
+        print(f"Navigating to category URL: {category_url}")
+        self.current_category_url = category_url
+        self.current_category_name = self.extract_category_name(category_url)["name"]
+        self.driver.get(category_url)
+        
+        # Wait for the page to load
+        time.sleep(10)
+        
+        # Check if products loaded
         try:
-            self.log(f"Opening URL: {self.category_url}")
-            self.driver.get(self.category_url)
-            
-            # Set location if coordinates are provided - with retry mechanism
-            if self.lat and self.lng:
-                location_success = self.set_location()
-                if not location_success:
-                    self.log("Warning: Failed to set location. Continuing with default location.")
-                else:
-                    self.log("Successfully set location. Page should be refreshed with products for this location.")
-                    # Add additional wait after location change
-                    time.sleep(5)
-            else:
-                self.log("No location coordinates provided. Using default location.")
-            
-            # Wait for the page to load with improved error handling
-            container_found = False
-            try:
-                # First find the container with all products
-                container = WebDriverWait(self.driver, 20).until(
-                    EC.presence_of_element_located((By.ID, "plpContainer"))
-                )
-                container_found = True
-                
-                # Then find all product cards within the container
-                product_cards = container.find_elements(By.CSS_SELECTOR, "div > div > div[style*='grid-column: span']")
-                self.log(f"Page loaded successfully. Found {len(product_cards)} product cards")
-                
-                # Take screenshot to verify page loaded correctly
-                screenshot_path = f"{self.output_dir}/page_loaded_{int(time.time())}.png"
-                self.driver.save_screenshot(screenshot_path)
-                self.log(f"Page screenshot saved as {screenshot_path}")
-                
-                if len(product_cards) == 0:
-                    self.log("No product cards found in the container, but continuing anyway")
-            except TimeoutException:
-                self.log("Product container not found on initial load, trying alternative approaches")
-                
-                # Try alternative ways to check if page loaded
-                try:
-                    # Check for any products or content
-                    WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "div[style*='grid-column: span']"))
-                    )
-                    self.log("Found product elements using alternative selector")
-                    container_found = True
-                except:
-                    self.log("Could not find products with alternative selector")
-            
-            if not container_found:
-                self.log("Warning: Could not confirm page loaded successfully, but continuing anyway")
-                self.driver.save_screenshot(f"{self.output_dir}/no_container_{int(time.time())}.png")
-            
-            # Allow more time for initial API calls to complete
-            self.log("Waiting for initial API calls to complete...")
-            time.sleep(10)
-            
-            # Clear performance logs before scrolling to ensure we only get new responses
-            try:
-                self.driver.get_log("performance")
-            except:
-                pass
-            
-            # Scroll to trigger API requests
-            self.scroll_page(max_scrolls=scroll_count)
-            
-            # Check if we captured any responses
-            if not self.api_responses:
-                self.log("Warning: No API responses were captured!")
-                
-                # Try to force a page refresh and try again
-                self.log("Refreshing page to attempt capture again...")
-                self.driver.refresh()
-                time.sleep(10)
-                self.scroll_page(max_scrolls=5)  # Shorter scroll session
-                
-                if not self.api_responses:
-                    self.log("Error: Still no API responses after refresh")
-                    return False
-            
-            self.log(f"Successfully collected {len(self.api_responses)} API response files")
+            container = WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.ID, "plpContainer"))
+            )
+            product_cards = container.find_elements(By.CSS_SELECTOR, "div > div > div[style*='grid-column: span']")
+            print(f"Page loaded successfully. Found {len(product_cards)} product cards")
             return True
-            
-        except Exception as e:
-            self.log(f"Critical error occurred: {str(e)}")
-            import traceback
-            self.log(traceback.format_exc())
-            return False
-        finally:
-            self.log("Closing WebDriver")
-            self.driver.quit()
+        except:
+            print("Warning: Could not confirm page loaded successfully, but continuing anyway")
+            return True
+    
+    def scrape_category(self, scroll_count=25):
+        """Scrape the current category"""
+        # Scroll to trigger API requests
+        api_data = self.scroll_page(max_scrolls=scroll_count)
+        return True, api_data

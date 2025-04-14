@@ -1,95 +1,21 @@
 import os
-import json
 import csv
-import datetime
-import re
-import hashlib
-from pathlib import Path
+import json
+import pandas as pd
+from datetime import datetime
 
 class BlinkitProcessor:
-    def __init__(self, directory="blinkit_data"):
-        self.directory = directory
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+    def __init__(self, output_dir="blinkit_data"):
+        """Initialize the processor with output directory"""
+        self.output_dir = output_dir
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        # Track unique products to avoid duplicates
+        self.unique_products = {}
     
-    def find_category_files(self, category_pattern=None):
-        """
-        Find all category directories or response files in the data directory
-        If category_pattern is provided, will only return files matching that pattern
-        Works with the new nested folder organization
-        """
-        # Check for category directories first
-        category_dirs = [d for d in Path(self.directory).iterdir() if d.is_dir()]
-        
-        if not category_dirs:
-            # Fall back to old structure if no directories found
-            return self._find_category_files_old_structure(category_pattern)
-        
-        if category_pattern:
-            # Filter by category pattern
-            matching_dirs = []
-            for dir_path in category_dirs:
-                if category_pattern in dir_path.name:
-                    matching_dirs.append(dir_path)
-            
-            if not matching_dirs:
-                print(f"No category directories found matching pattern: {category_pattern}")
-                return []
-            
-            # Get all JSON files in matching directories
-            all_files = []
-            for dir_path in matching_dirs:
-                json_files = list(dir_path.glob("*.json"))
-                all_files.extend(json_files)
-            
-            return all_files
-        
-        # Group by category
-        category_files = {}
-        for dir_path in category_dirs:
-            category = dir_path.name
-            json_files = list(dir_path.glob("*.json"))
-            
-            if json_files:  # Only include if there are files
-                category_files[category] = json_files
-        
-        return category_files
-    
-    def _find_category_files_old_structure(self, category_pattern=None):
-        """
-        Find all category response files in the old directory structure
-        If category_pattern is provided, will only return files matching that pattern
-        """
-        all_files = list(Path(self.directory).glob("*_response_*.json"))
-        
-        if category_pattern:
-            # Filter by category pattern
-            matching_files = []
-            pattern = re.compile(f"^{category_pattern}_response_")
-            
-            for file_path in all_files:
-                if pattern.match(file_path.name):
-                    matching_files.append(file_path)
-            
-            return matching_files
-        
-        # Group by category
-        category_files = {}
-        for file_path in all_files:
-            parts = file_path.name.split("_response_")
-            if len(parts) > 1:
-                category = parts[0]
-                if category not in category_files:
-                    category_files[category] = []
-                category_files[category].append(file_path)
-        
-        return category_files
-
     def generate_product_hash(self, product):
-        """
-        Generate a unique hash for a product based on its key attributes
-        """
-        # Create a string containing the key attributes that determine uniqueness
+        """Generate a unique hash for a product based on key attributes"""
         unique_attrs = (
             f"{product.get('l1_category', '')}"
             f"{product.get('l2_category', '')}"
@@ -101,323 +27,297 @@ class BlinkitProcessor:
             f"{product.get('brand', '')}"
         )
         
-        # Generate a hash of this string
+        import hashlib
         return hashlib.md5(unique_attrs.encode('utf-8')).hexdigest()
-
-    def check_for_offer(self, product):
+    
+    def process_api_data(self, api_data, category_info, lat, lng):
         """
-        Determines if a product has an offer by checking multiple possible indicators
-        """
-        # For the "widgets" structure
-        if product.get("is_offer", False):
-            return True
+        Process API response data and extract product details
         
-        # Check price discount
-        selling_price = str(product.get("selling_price", "0")).replace('₹', '').strip()
-        mrp = str(product.get("mrp", "0")).replace('₹', '').strip()
-        
-        try:
-            selling_price = float(selling_price) if selling_price else 0
-            mrp = float(mrp) if mrp else 0
-            if mrp > 0 and selling_price > 0 and selling_price < mrp:
-                return True
-        except ValueError:
-            pass
-        
-        # For the "snippets" structure 
-        if product.get("offer_tag") is not None:
-            return True
+        Args:
+            api_data: List of API response JSON data
+            category_info: Dictionary containing category details
+            lat: Latitude for this data
+            lng: Longitude for this data
             
-        return False
-
-    def extract_category_info_from_path(self, file_path):
+        Returns:
+            List of extracted product dictionaries
         """
-        Extract category information from file path based on new structure
-        """
-        # Get the parent directory name which should be the category
-        category_name = file_path.parent.name
+        products = []
+        date_str = datetime.now().strftime('%Y-%m-%d')
         
-        # Default values
-        l1_category = ""
-        l1_category_id = ""
-        l2_category = ""
-        l2_category_id = ""
+        l1_category = category_info.get('l1_category', '')
+        l1_category_id = category_info.get('l1_category_id', '')
+        l2_category = category_info.get('l2_category', '')
+        l2_category_id = category_info.get('l2_category_id', '')
         
-        # Where munchies is l1_category, 1237 is l1_category_id, bhujia-mixtures is l2_category, 1178 is l2_category_id
-        parts = category_name.split("_")
-        if len(parts) >= 4:
-            l1_category = parts[0]
-            l1_category_id = parts[2]
-            l2_category = parts[1] 
-            l2_category_id = parts[3]
-        elif len(parts) >= 2:
-            # Handle case where only main category is present
-            l1_category = parts[0]
-            l1_category_id = parts[1]
-        
-        return {
-            'category_name': category_name,
-            'l1_category': l1_category,
-            'l1_category_id': l1_category_id,
-            'l2_category': l2_category,
-            'l2_category_id': l2_category_id
-        }
-
-    def extract_timestamp_from_filename(self, file_path):
-        """
-        Extract timestamp from filename in new format
-        """
-        file_name = file_path.name
-        
-        # Check if it's a new format file (lat{value}_lng{value}_{timestamp}.json)
-        matches = re.search(r'_([\d]+)\.json$', file_name)
-        if matches:
-            return matches.group(1)
-            
-        # Try old format
-        try:
-            timestamp_part = file_name.split('_response_')[1].split('_')[0]
-            return timestamp_part
-        except:
-            # Fallback to file creation time
-            return str(int(os.path.getctime(file_path)))
-
-    def parse_blinkit_json_files(self, files):
-        """
-        Parses specified JSON files and extracts product data.
-        """
-        unique_products = {}  # Dictionary to store unique products with hash as key
-        processed_files = 0
-        duplicates_found = 0
-        
-        print(f"Processing {len(files)} JSON files")
-        
-        for json_file in files:
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # Extract timestamp from filename
-                timestamp_part = self.extract_timestamp_from_filename(json_file)
-                date = datetime.datetime.fromtimestamp(int(timestamp_part))
-                date_str = date.strftime('%Y-%m-%d')
-                
-                # Extract category information from path
-                category_info = self.extract_category_info_from_path(json_file)
-                l1_category = category_info['l1_category']
-                l1_category_id = category_info['l1_category_id']
-                l2_category = category_info['l2_category']
-                l2_category_id = category_info['l2_category_id']
-                
-                # Parse products from widgets structure
-                if "widgets" in data:
-                    for widget in data["widgets"]:
-                        if "products" in widget:
-                            for product in widget["products"]:
-                                # Extract product data
-                                try:
-                                    # Extract product details
-                                    selling_price = product.get("price", {}).get("selling_price", "")
-                                    mrp = product.get("price", {}).get("mrp", "")
-                                    
-                                    # Create basic product data
-                                    product_data = {
-                                        'date': date_str,
-                                        'l1_category': l1_category,
-                                        'l1_category_id': l1_category_id,
-                                        'l2_category': l2_category,
-                                        'l2_category_id': l2_category_id,
-                                        'store_id': product.get("store_id", ""),
-                                        'variant_id': product.get("id", ""),
-                                        'variant_name': f"{product.get('name', '')} {product.get('variant', '')}".strip(),
-                                        'group_id': product.get("group_id", ""),
-                                        'selling_price': selling_price,
-                                        'mrp': mrp,
-                                        'in_stock': 'Yes' if product.get("is_in_stock", False) else 'No',
-                                        'inventory': product.get("inventory", 0),
-                                        'image_url': product.get("image_url", ""),
-                                        'brand_id': product.get("brand_id", ""),
-                                        'brand': product.get("brand", "")
-                                    }
-                                    
-                                    # Check for offer - enhanced logic
-                                    has_offer = False
-                                    if product.get("is_offer", False):
-                                        has_offer = True
-                                    elif mrp and selling_price and float(mrp) > float(selling_price):
-                                        has_offer = True
-                                    
-                                    product_data['is_offer'] = 'Yes' if has_offer else 'No'
-                                    
-                                    # Generate hash and check for duplicates
-                                    product_hash = self.generate_product_hash(product_data)
-                                    if product_hash not in unique_products:
-                                        unique_products[product_hash] = product_data
-                                    else:
-                                        duplicates_found += 1
-                                except Exception as e:
-                                    print(f"Error processing product: {str(e)}")
-                
-                # Alternative structure (check for snippets format)
-                elif 'response' in data and 'snippets' in data['response']:
-                    for snippet in data['response']['snippets']:
-                        if 'data' in snippet:
-                            product_data = snippet['data']
+        # Process each API response
+        for response_data in api_data:
+            # Parse products from widgets structure
+            if "widgets" in response_data:
+                for widget in response_data["widgets"]:
+                    if "products" in widget:
+                        for product in widget["products"]:
+                            # Extract product details
+                            selling_price = product.get("price", {}).get("selling_price", "")
+                            mrp = product.get("price", {}).get("mrp", "")
                             
-                            # Try to get category from common_attributes first
-                            tracking_data = snippet.get('tracking', {}).get('common_attributes', {})
-                            
-                            # Keep original category info from filename
-                            # Only replace if empty and there's data in the tracking info
-                            if not l2_category and tracking_data.get('l2_category'):
-                                l2_category = tracking_data.get('l2_category', '')
-                            
-                            if not l2_category_id and tracking_data.get('type_id'):
-                                l2_category_id = str(tracking_data.get('type_id', ''))
-                            
-                            # Combine variant and name for variant_name
-                            variant_text = product_data.get('variant', {}).get('text', '')
-                            name_text = product_data.get('name', {}).get('text', '')
-                            variant_name = f"{name_text} {variant_text}".strip()
-                            
-                            # Handle price extraction - properly extract numeric values
-                            selling_price = product_data.get('normal_price', {}).get('text', '')
-                            selling_price = selling_price.replace('₹', '').strip() if selling_price else ''
-                            
-                            # Handle MRP - some products might not have an MRP if not discounted
-                            mrp = product_data.get('mrp', {}).get('text', '')
-                            if not mrp:
-                                # If MRP is not present, use the selling price as MRP
-                                mrp = selling_price
-                            else:
-                                mrp = mrp.replace('₹', '').strip()
-                            
-                            # Determine if product has an offer
-                            has_offer = False
-                            
-                            # Check for offer_tag
-                            if product_data.get('offer_tag') is not None:
-                                has_offer = True
-                            # Check for price difference
-                            elif mrp and selling_price and float(mrp) > float(selling_price):
-                                has_offer = True
-                            # Check direct offer property (even if null, we check other indicators)
-                            elif product_data.get('offer') is not None and product_data.get('offer') is not False:
-                                # The presence of 'offer' field might indicate an offer even if it's null
-                                if product_data.get('offer') or mrp != selling_price:
-                                    has_offer = True
-                            
-                            product = {
+                            # Create product data
+                            product_data = {
                                 'date': date_str,
+                                'lat': lat,
+                                'lng': lng,
                                 'l1_category': l1_category,
                                 'l1_category_id': l1_category_id,
                                 'l2_category': l2_category,
                                 'l2_category_id': l2_category_id,
-                                'store_id': product_data.get('merchant_id', ''),
-                                'variant_id': product_data.get('product_id', ''),
-                                'variant_name': variant_name,
-                                'group_id': product_data.get('group_id', ''),
+                                'store_id': product.get("store_id", ""),
+                                'variant_id': product.get("id", ""),
+                                'variant_name': f"{product.get('name', '')} {product.get('variant', '')}".strip(),
+                                'group_id': product.get("group_id", ""),
                                 'selling_price': selling_price,
                                 'mrp': mrp,
-                                'in_stock': 'Yes' if not product_data.get('is_sold_out', True) else 'No',
-                                'inventory': product_data.get('inventory', 0),
-                                'is_offer': 'Yes' if has_offer else 'No',
-                                'image_url': product_data.get('image', {}).get('url', ''),
-                                'brand_id': '',  # Not directly available in the sample
-                                'brand': product_data.get('brand_name', {}).get('text', '')
+                                'in_stock': 'Yes' if product.get("is_in_stock", False) else 'No',
+                                'inventory': product.get("inventory", 0),
+                                'image_url': product.get("image_url", ""),
+                                'brand_id': product.get("brand_id", ""),
+                                'brand': product.get("brand", "")
                             }
                             
+                            # Check for offer
+                            has_offer = False
+                            if product.get("is_offer", False):
+                                has_offer = True
+                            elif mrp and selling_price and float(mrp) > float(selling_price):
+                                has_offer = True
+                            
+                            product_data['is_offer'] = 'Yes' if has_offer else 'No'
+                            
                             # Generate hash and check for duplicates
-                            product_hash = self.generate_product_hash(product)
-                            if product_hash not in unique_products:
-                                unique_products[product_hash] = product
-                            else:
-                                duplicates_found += 1
-                
-                processed_files += 1
-                if processed_files % 10 == 0:
-                    print(f"Processed {processed_files} files, found {duplicates_found} duplicates so far")
-                    
-            except Exception as e:
-                print(f"Error processing file {json_file}: {str(e)}")
+                            product_hash = self.generate_product_hash(product_data)
+                            if product_hash not in self.unique_products:
+                                self.unique_products[product_hash] = True
+                                products.append(product_data)
+            
+            # Alternative structure (check for snippets format)
+            elif 'response' in response_data and 'snippets' in response_data['response']:
+                for snippet in response_data['response']['snippets']:
+                    if 'data' in snippet:
+                        product_data = snippet['data']
+                        
+                        # Combine variant and name for variant_name
+                        variant_text = product_data.get('variant', {}).get('text', '')
+                        name_text = product_data.get('name', {}).get('text', '')
+                        variant_name = f"{name_text} {variant_text}".strip()
+                        
+                        # Handle price extraction
+                        selling_price = product_data.get('normal_price', {}).get('text', '')
+                        selling_price = selling_price.replace('₹', '').strip() if selling_price else ''
+                        
+                        # Handle MRP 
+                        mrp = product_data.get('mrp', {}).get('text', '')
+                        if not mrp:
+                            mrp = selling_price
+                        else:
+                            mrp = mrp.replace('₹', '').strip()
+                        
+                        # Determine if product has an offer
+                        has_offer = False
+                        if product_data.get('offer_tag') is not None:
+                            has_offer = True
+                        elif mrp and selling_price and float(mrp) > float(selling_price):
+                            has_offer = True
+                        elif product_data.get('offer') is not None and product_data.get('offer') is not False:
+                            if product_data.get('offer') or mrp != selling_price:
+                                has_offer = True
+                        
+                        product = {
+                            'date': date_str,
+                            'lat': lat,
+                            'lng': lng,
+                            'l1_category': l1_category,
+                            'l1_category_id': l1_category_id,
+                            'l2_category': l2_category,
+                            'l2_category_id': l2_category_id,
+                            'store_id': product_data.get('merchant_id', ''),
+                            'variant_id': product_data.get('product_id', ''),
+                            'variant_name': variant_name,
+                            'group_id': product_data.get('group_id', ''),
+                            'selling_price': selling_price,
+                            'mrp': mrp,
+                            'in_stock': 'Yes' if not product_data.get('is_sold_out', True) else 'No',
+                            'inventory': product_data.get('inventory', 0),
+                            'is_offer': 'Yes' if has_offer else 'No',
+                            'image_url': product_data.get('image', {}).get('url', ''),
+                            'brand_id': '',
+                            'brand': product_data.get('brand_name', {}).get('text', '')
+                        }
+                        
+                        # Generate hash and check for duplicates
+                        product_hash = self.generate_product_hash(product)
+                        if product_hash not in self.unique_products:
+                            self.unique_products[product_hash] = True
+                            products.append(product)
         
-        # Convert dictionary values back to a list
-        all_products = list(unique_products.values())
-        
-        print(f"Extracted {len(all_products)} unique products from {processed_files} files")
-        print(f"Filtered out {duplicates_found} duplicate products")
-        
-        return all_products
-
-    def save_to_csv(self, products, category_name=None):
+        print(f"Processed {len(products)} unique products from API data")
+        return products
+    
+    def update_csv(self, products, output_csv_path):
         """
-        Saves the extracted product data to a CSV file.
+        Update the CSV file with new product data
+        
+        Args:
+            products: List of product dictionaries to add
+            output_csv_path: Path to the CSV file
         """
-        if not products:
-            print("No products to save")
-            return None
-        
-        # Create output filename
-        if category_name:
-            output_file = f"{self.directory}/{category_name}_products.csv"
-        else:
-            output_file = f"{self.directory}/blinkit_products_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
-        # Define field names for the CSV
         fieldnames = [
-            'date', 'l1_category', 'l1_category_id', 'l2_category', 'l2_category_id',
+            'date', 'lat', 'lng', 'l1_category', 'l1_category_id', 'l2_category', 'l2_category_id',
             'store_id', 'variant_id', 'variant_name', 'group_id', 'selling_price',
             'mrp', 'in_stock', 'inventory', 'is_offer', 'image_url', 'brand_id', 'brand'
         ]
         
-        # Write to CSV
-        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(products)
+        # Create file with headers if it doesn't exist
+        file_exists = os.path.exists(output_csv_path)
         
-        print(f"Saved {len(products)} unique products to {output_file}")
-        return output_file
+        with open(output_csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            
+            # Write header only if the file doesn't exist yet
+            if not file_exists:
+                writer.writeheader()
+            
+            # Write all product rows
+            for product in products:
+                writer.writerow(product)
     
-    def process_category(self, category_pattern=None):
+    def process_csv(self, input_csv=None):
         """
-        Process a specific category or all categories if none specified
+        Process the CSV file with all products
+        If input_csv is None, uses the default blinkit_products.csv
         """
-        if category_pattern:
-            # Process a specific category
-            files = self.find_category_files(category_pattern)
-            if not files:
-                print(f"No files found for category pattern: {category_pattern}")
+        if input_csv is None:
+            input_csv = f"{self.output_dir}/blinkit_products.csv"
+        
+        if not os.path.exists(input_csv):
+            print(f"CSV file not found: {input_csv}")
+            return None
+        
+        try:
+            # Load the CSV into pandas DataFrame
+            df = pd.read_csv(input_csv)
+            
+            print(f"Loaded {len(df)} product records from {input_csv}")
+            
+            # Generate summary statistics
+            summary = self.generate_summary(df)
+            
+            # Save summary to CSV
+            summary_file = f"{self.output_dir}/blinkit_summary.csv"
+            summary.to_csv(summary_file, index=False)
+            print(f"Saved summary to {summary_file}")
+            
+            return {
+                'records_processed': len(df),
+                'summary_file': summary_file
+            }
+            
+        except Exception as e:
+            print(f"Error processing CSV file: {str(e)}")
+            return None
+    
+    def generate_summary(self, df):
+        """
+        Generate summary statistics for the scraped data
+        """
+        # Group by location (lat, lng) and category
+        location_summary = df.groupby(['lat', 'lng']).agg({
+            'variant_id': 'nunique',
+            'is_offer': lambda x: (x == 'Yes').sum()
+        }).reset_index()
+        
+        location_summary.columns = ['latitude', 'longitude', 'unique_products', 'products_with_offers']
+        
+        # Calculate percentage of products with offers
+        location_summary['offer_percentage'] = (location_summary['products_with_offers'] / location_summary['unique_products'] * 100).round(2)
+        
+        return location_summary
+    
+    def analyze_price_variations(self, input_csv=None):
+        """
+        Analyze price variations for the same product across different locations
+        """
+        if input_csv is None:
+            input_csv = f"{self.output_dir}/blinkit_products.csv"
+        
+        if not os.path.exists(input_csv):
+            print(f"CSV file not found: {input_csv}")
+            return None
+        
+        try:
+            # Load the CSV into pandas DataFrame
+            df = pd.read_csv(input_csv)
+            
+            # Group by product ID and check for price variations
+            price_variations = df.groupby('variant_id').agg({
+                'variant_name': 'first',
+                'selling_price': lambda x: x.nunique(),
+                'lat': 'nunique'
+            }).reset_index()
+            
+            # Filter to only products with price variations and multiple locations
+            price_variations = price_variations[
+                (price_variations['selling_price'] > 1) & 
+                (price_variations['lat'] > 1)
+            ]
+            
+            # Sort by number of price variations
+            price_variations = price_variations.sort_values('selling_price', ascending=False)
+            
+            # Save to CSV
+            if len(price_variations) > 0:
+                variations_file = f"{self.output_dir}/price_variations.csv"
+                price_variations.to_csv(variations_file, index=False)
+                print(f"Saved price variations to {variations_file}")
+                return variations_file
+            else:
+                print("No price variations found across locations")
                 return None
             
-            print(f"Found {len(files)} files for category pattern: {category_pattern}")
-            products = self.parse_blinkit_json_files(files)
-            return self.save_to_csv(products, category_pattern)
-        else:
-            # Process all categories
-            categories = self.find_category_files()
-            results = {}
-            
-            for category, files in categories.items():
-                print(f"\nProcessing category: {category} ({len(files)} files)")
-                products = self.parse_blinkit_json_files(files)
-                csv_file = self.save_to_csv(products, category)
-                results[category] = {
-                    'files_processed': len(files),
-                    'products_extracted': len(products),
-                    'csv_file': csv_file
-                }
-            
-            return results
+        except Exception as e:
+            print(f"Error analyzing price variations: {str(e)}")
+            return None
     
-    def list_categories(self):
+    def analyze_offer_patterns(self, input_csv=None):
         """
-        List all available categories in the data directory
+        Analyze offer patterns across locations
         """
-        categories = self.find_category_files()
+        if input_csv is None:
+            input_csv = f"{self.output_dir}/blinkit_products.csv"
         
-        print(f"Found {len(categories)} categories:")
-        for category, files in categories.items():
-            print(f"- {category}: {len(files)} files")
+        if not os.path.exists(input_csv):
+            print(f"CSV file not found: {input_csv}")
+            return None
         
-        return list(categories.keys())
+        try:
+            # Load the CSV into pandas DataFrame
+            df = pd.read_csv(input_csv)
+            
+            # Group by category and location
+            offer_patterns = df.groupby(['l1_category', 'l2_category', 'lat', 'lng']).agg({
+                'variant_id': 'count',
+                'is_offer': lambda x: (x == 'Yes').sum()
+            }).reset_index()
+            
+            # Calculate offer percentage
+            offer_patterns['offer_percentage'] = (offer_patterns['is_offer'] / offer_patterns['variant_id'] * 100).round(2)
+            offer_patterns.columns = ['l1_category', 'l2_category', 'lat', 'lng', 'product_count', 'offers_count', 'offer_percentage']
+            
+            # Save to CSV
+            pattern_file = f"{self.output_dir}/offer_patterns.csv"
+            offer_patterns.to_csv(pattern_file, index=False)
+            print(f"Saved offer patterns to {pattern_file}")
+            return pattern_file
+            
+        except Exception as e:
+            print(f"Error analyzing offer patterns: {str(e)}")
+            return None
